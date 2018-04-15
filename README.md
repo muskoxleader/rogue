@@ -79,7 +79,7 @@ total 40
 ```
 
 ## Overriding default settings
-Some default settings can be overridden using `$HOME/.rogue/.templates`.
+Some default settings can be overridden using `$HOME/.rogue/.config`.
 ```
 DEFAULT_CONTAINER_IMAGE=centos:centos6
 DEFAULT_DNS_ZONE=corp.example.com
