@@ -58,7 +58,7 @@ total 8
 ```
 
 ## Setting environment variables
-At provision time.
+At provisioning time.
 ```
 $ rogue prov one --env ROGUE_ENV=sandbox
 46c787e6ca666437afc5661fde77a2701196bec91ac1935f70d576b1f0fadbc1
@@ -66,7 +66,7 @@ $ rogue shell one
 bash-4.1# env | grep ROGUE_ENV
 ROGUE_ENV=sandbox
 ```
-At exec time.
+At access time.
 ```
 $ rogue shell one --env ROGUE_ENV=sandbox
 bash-4.1# env | grep ROGUE_ENV
