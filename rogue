@@ -1,0 +1,411 @@
+#!/bin/bash
+# vim: nu: tabstop=4: softtabstop=4: shiftwidth=4: expandtab
+ROOT_DIR=$HOME/.rogue
+CONFIG_FILE=$ROOT_DIR/.config
+TEMPLATE_DIR=$ROOT_DIR/.templates
+
+function _list_usage {
+    cat <<EOF
+Usage: rogue list
+
+List containers
+
+Options:
+  -a, --all     Show all containers (default shows just running)
+  -c, --count   Show count of containers
+  -f, --format  Pretty-print containers using a Go template
+  -q, --quiet   Only display numeric IDs
+EOF
+}
+
+function _list {
+    local COUNT_ONLY=false
+    local OPTIONS=()
+    while true; do
+        case $1 in
+        -h | --help | help) _list_usage; exit;;
+        -a | --all)
+            OPTIONS+=(--all); shift
+            ;;
+        -c | --count)
+            COUNT_ONLY=true; shift
+            ;;
+        -f | --format)
+            OPTIONS+=(--format $2); shift 2
+            ;;
+        -q | --quiet)
+            OPTIONS+=(--quiet); shift
+            ;;
+        --)
+            shift; break
+            ;;
+        *)
+            echo Error: Invalid arugment: $1 1>&2;
+            _list_usage
+            exit 1
+            ;;
+        esac
+    done
+    if [ "$COUNT_ONLY" == 'true' ]; then
+        docker container ls ${OPTIONS[*]} --quiet | wc -l
+    else
+        docker container ls ${OPTIONS[*]}
+    fi
+}
+
+function _provision_usage {
+    cat <<EOF
+Usage: rogue provision CONTAINER
+
+Init, allocate a pseudo-TTY, open STDIN, give extended privileges
+and run /bin/bash in background in a new container
+
+Options:
+  -e, --env list            Set environment variables
+  -i, --image image         Docker image
+  -p, --port port:port      Publish a container's port(s) to the host
+  -r, --registry registry   Docker registry
+  -z, --zone zone           DNS zone
+EOF
+}
+
+function _provision {
+    local CONTAINER_NAME CONTAINER_STATUS FULLY_QUALIFIED_IMAGE
+    # DEFAULT_* may or may not be set
+    local CONTAINER_IMAGE=$DEFAULT_CONTAINER_IMAGE
+    local DNS_ZONE=$DEFAULT_DNS_ZONE
+    local REGISTRY=$DEFAULT_REGISTRY
+    local OPTIONS=(
+        --init
+        --detach
+        --interactive
+        --tty
+        --privileged
+    )
+    while true; do
+        case $1 in
+        -h | --help | help) _provision_usage; exit;;
+        -e | --env)
+            OPTIONS+=(--env $2); shift 2
+            ;;
+        -i | --image)
+            CONTAINER_IMAGE=$2; shift 2
+            ;;
+        -r | --registry)
+            REGISTRY=$2; shift 2
+            ;;
+        -p | --port)
+            OPTIONS+=(--publish $2); shift 2
+            ;;
+        -z | --zone)
+            DNS_ZONE=$2; shift 2
+            ;;
+        --)
+            shift; break
+            ;;
+        -*)
+            echo Error: Invalid arugment: $1 1>&2;
+            _provision_usage
+            exit 1
+            ;;
+        *)
+            CONTAINER_NAME=$1; shift
+            ;;
+        esac
+    done
+    if [ -z "$CONTAINER_NAME" ]; then
+        echo Error: Container not specified 1>&2
+        exit 1;
+    fi
+    CONTAINER_STATUS="$(_show -s $CONTAINER_NAME -- 2>/dev/null)"
+    if [ -n "$CONTAINER_STATUS" ]; then
+        echo "Error: Container '$CONTAINER_NAME' already exists" 1>&2
+        exit 1;
+    fi
+    if [ -z "$CONTAINER_IMAGE" ]; then
+        CONTAINER_IMAGE=centos:latest
+    fi
+    if [ -z "$DNS_ZONE" ]; then
+        DNS_ZONE=local
+    fi
+    if [ -n "$REGISTRY" ]; then
+        FULLY_QUALIFIED_IMAGE="$REGISTRY/"
+    fi
+    FULLY_QUALIFIED_IMAGE="${FULLY_QUALIFIED_IMAGE}${CONTAINER_IMAGE}"
+    docker run ${OPTIONS[*]} \
+        --volume $ROOT_DIR/$CONTAINER_NAME:/root \
+        --workdir /root \
+        --hostname $(hostname)-$CONTAINER_NAME.$DNS_ZONE \
+        --name $CONTAINER_NAME \
+        $FULLY_QUALIFIED_IMAGE \
+        /bin/bash
+    if [ -d $TEMPLATE_DIR ]; then
+        for ITEM in $(ls $TEMPLATE_DIR); do
+            docker cp $TEMPLATE_DIR/$ITEM $CONTAINER_NAME:/
+        done
+    fi
+}
+
+function _scrap_usage {
+    cat <<EOF
+Usage: rogue scrap CONTAINER
+
+Stop and remove one or more running containers
+EOF
+}
+
+function _scrap {
+    local BATCH=()
+    local CONTAINER_NAMES=()
+    while true; do
+        case $1 in
+        -h | --help | help) _scrap_usage; exit;;
+        --)
+            shift; break
+            ;;
+        -*)
+            echo Error: Invalid arugment: $1 1>&2;
+            _show_usage
+            exit 1
+            ;;
+        *)
+            CONTAINER_NAMES+=($1); shift
+            ;;
+        esac
+    done
+    # Check if containers are still running
+    for NAME in ${CONTAINER_NAMES[*]}; do
+        local CONTAINER_STATUS="$(_show -s $NAME --)"
+        if [ -z "$CONTAINER_STATUS" ]; then
+            continue
+        fi
+        BATCH+=($NAME)
+    done
+    if ((${#BATCH[@]} == 0)); then
+        echo Error: No containers to scrap
+        exit 1
+    fi
+    echo Stopping: ${BATCH[*]}
+    _stop ${BATCH[*]} --
+    echo Removing: ${BATCH[*]}
+    docker container rm ${BATCH[*]} &>/dev/null
+}
+
+function _shell_usage {
+    cat <<EOF
+Usage: rogue shell CONTAINER
+
+Shell into a container
+
+Options:
+  -e, --env list            Set environment variables
+EOF
+}
+
+function _shell {
+    local CONTAINER_NAME
+    local OPTIONS=(
+        --env COLUMNS=$COLUMNS
+        --env LINES=$LINES
+        --env TERM=$TERM
+        --interactive
+        --tty
+        --privileged
+    )
+    while true; do
+        case $1 in
+        -h | --help | help) _shell_usage; exit;;
+        -e | --env)
+            OPTIONS+=(--env $2); shift 2
+            ;;
+        --)
+            shift; break
+            ;;
+        -*)
+            echo Error: Invalid arugment: $1 1>&2;
+            _shell_usage
+            exit 1
+            ;;
+        *)
+            CONTAINER_NAME=$1; shift
+            ;;
+        esac
+    done
+    if [ -z "$CONTAINER_NAME" ]; then
+        echo Error: Container not specified 1>&2
+        exit 1;
+    fi
+    docker exec ${OPTIONS[*]} $CONTAINER_NAME /bin/bash -l
+}
+
+function _show_usage {
+    cat <<EOF
+Usage: rogue show CONTAINER
+
+Show detailed information about a container
+
+Options:
+  -f, --format string   Format the output using the given Go template
+  -s, --status          Equivalent of --format '{{.State.Status}}'
+EOF
+}
+
+function _show {
+    local OPTIONS=()
+    local CONTAINER_NAMES=()
+    while true; do
+        case $1 in
+        -h | --help | help) _show_usage; exit;;
+        -f | --format)
+            OPTIONS+=(--format $2); shift 2
+            ;;
+        -s | --status)
+            OPTIONS+=(--format '{{.State.Status}}'); shift
+            ;;
+        --)
+            shift; break
+            ;;
+        -*)
+            echo Error: Invalid arugment: $1 1>&2;
+            _show_usage
+            exit 1
+            ;;
+        *)
+            CONTAINER_NAMES+=($1); shift
+            ;;
+        esac
+    done
+    if ((${#CONTAINER_NAMES[@]} == 0)); then
+        echo Error: No containers specified
+        exit 1
+    fi
+    docker container inspect ${OPTIONS[*]} ${CONTAINER_NAMES[*]}
+}
+
+function _start_usage {
+    cat <<EOF
+Usage: rogue start CONTAINER
+
+Start one or more stopped containers
+EOF
+}
+
+function _start {
+    local CONTAINER_NAMES=()
+    while true; do
+        case $1 in
+        -h | --help | help) _start_usage; exit;;
+        --)
+            shift; break
+            ;;
+        -*)
+            echo Error: Invalid arugment: $1 1>&2;
+            _start_usage
+            exit 1
+            ;;
+        *)
+            CONTAINER_NAMES+=($1); shift
+            ;;
+        esac
+    done
+    if ((${#CONTAINER_NAMES[@]} == 0)); then
+        echo Error: No containers specified
+        exit 1
+    fi
+    docker container start ${CONTAINER_NAMES[*]} 1>/dev/null
+}
+
+function _stop_usage {
+    cat <<EOF
+Usage: rogue stop CONTAINER
+
+Stop one or more running containers
+EOF
+}
+
+function _stop {
+    local CONTAINER_NAMES=()
+    while true; do
+        case $1 in
+        -h | --help | help) _stop_usage; exit;;
+        --)
+            shift; break
+            ;;
+        -*)
+            echo Error: Invalid arugment: $1 1>&2;
+            _stop_usage
+            exit 1
+            ;;
+        *)
+            CONTAINER_NAMES+=($1); shift
+            ;;
+        esac
+    done
+    if ((${#CONTAINER_NAMES[@]} == 0)); then
+        echo Error: No containers specified
+        exit 1
+    fi
+    docker container stop ${CONTAINER_NAMES[*]} 1>/dev/null
+}
+
+function _usage {
+    cat <<EOF
+Usage: rogue COMMAND
+
+A wrapper utility for launching and tearing down docker containers
+
+Commands:
+  list          List containers
+  provision     Provision a container
+  scrap         Stop and delete a running container
+  shell         Shell into a running container
+  show          Show detailed information about a container
+  start         Start one or more stopped containers
+  stop          Stop one or more running containers
+
+Run 'rogue COMMAND --help' for more information on a command
+EOF
+}
+
+if [ -f $CONFIG_FILE ]; then
+    . $CONFIG_FILE
+fi
+
+while true; do
+    case $1 in
+    -h | --help | help) _usage; exit;;
+    ls | list)
+        shift; _list $@ --;
+        exit $?
+        ;;
+    prov | provision)
+        shift; _provision $@ --;
+        exit $?
+        ;;
+    scrap)
+        shift; _scrap $@ --;
+        exit $?
+        ;;
+    shell)
+        shift; _shell $@ --;
+        exit $?
+        ;;
+    show)
+        shift; _show $@ --;
+        exit $?
+        ;;
+    start)
+        shift; _start $@ --;
+        exit $?
+        ;;
+    stop)
+        shift; _stop $@ --;
+        exit $?
+        ;;
+    *)
+        echo Error: Invalid arugment: $1 1>&2;
+        _usage;
+        exit 1
+        ;;
+    esac
+done
