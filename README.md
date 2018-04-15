@@ -4,6 +4,11 @@ CLI wrapper for fast provisioning and tear down of docker containers.
 - Build and deploy in isolated throw-away workspaces
 - Simplied interface for common docker CLI parameters
 
+## Installation
+Run `make install`.
+- Creates `$HOME/.rogue` for configs, templates, and transient files.
+- Copies executable to `/usr/loca/bin`.
+
 ## Provisioning containers
 Simplified interface for launching containers using `docker run`.
 ```
