@@ -74,7 +74,7 @@ ROGUE_ENV=sandbox
 ```
 
 ## Template files
-Files in `$HOME/.rogue/.templates` will be copied into `/` of provisioned containers at provisioning time.
+Files in `$HOME/.rogue/.templates` will be copied into `/` of containers at provisioning time.
 ```
 $ ll $HOME/.rogue/.templates/root
 total 40
